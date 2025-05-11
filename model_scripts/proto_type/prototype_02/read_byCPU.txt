@@ -1,0 +1,22 @@
+モデル構造: DeepSets_varSets_forDiagnel】
+diagonal_prototype_02
+[入力]
+カテゴリ数 (num_categories): 4
+埋め込み次元 (embedding_dim): 2
+[特徴抽出層]
+第1層 (fc1): 64ユニット （BatchNorm適用, Dropout: 0.2）
+第2層 (fc2): 32ユニット （BatchNorm適用, Dropout: 0.3）
+[集約層]
+第3層 (fc3): 128ユニット （Dropout: 0.3）
+第4層 (fc4): 64ユニット （Dropout: 0.2）
+第5層 (fc5): 32ユニット （Dropout: 0.1）
+[出力層]
+第6層 (fc6): 3ユニット （Softplus適用, 出力を正値に制約）
+
+訓練時間：246分（GPU未使用）
+Loss：0.215391
+損失関数はワッサーステイン距離
+epochは10
+batchsize = 32
+
+バッチサイズが小さいと精度低下の可能性？

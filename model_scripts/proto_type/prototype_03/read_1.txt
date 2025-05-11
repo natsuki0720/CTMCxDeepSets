@@ -1,0 +1,25 @@
+【モデル構造: DeepSets_varSets_forDiagnel】
+diagonal_prototype_03_bs256.pth
+[入力]
+- num_categories: 4
+- embedding_dim: 2
+
+[特徴抽出層]
+- fc1: 128ユニット (BatchNorm1d, Dropout: 0.2)
+- fc2: 64ユニット (BatchNorm1d, Dropout: 0.3)
+
+[集約後の層]
+- fc3: 256ユニット (Dropout: 0.3)
+- fc4: 128ユニット (Dropout: 0.3)
+- fc5: 128ユニット (Dropout: 0.2)
+- fc6: 64ユニット (Dropout: 0.1)
+
+[出力層]
+- fc7: 3ユニット (Softplus適用)
+
+訓練時間：568分
+val_loss：0.073733
+batchsize = 128
+バッチサイズが大きい分精度が向上
+どこまで大きくできる？
+メモリ効率の良い訓練インフラの構築が必要

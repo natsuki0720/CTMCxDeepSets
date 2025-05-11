@@ -1,0 +1,21 @@
+【モデル構造: DeepSets_varSets_forDiagnel】
+
+[入力]
+- num_categories: 4
+- embedding_dim: 2
+
+[特徴抽出層]
+- fc1: 48ユニット (Dropout: 0.1)
+- fc2: 24ユニット (Dropout: 0.3)
+
+[集約層]
+- fc3: 96ユニット (Dropout: 0.3)
+- fc4: 48ユニット (Dropout: 0.1)
+
+[出力層]
+- fc5: 3ユニット (Softplus適用)
+
+損失関数は1-ワッサーステイン距離
+エポック数は10で打ち切り（prototypeのため）
+所要時間3時間（GPU使用なし）
+val_loss = 0.194452
