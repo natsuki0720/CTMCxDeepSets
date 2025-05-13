@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.optimize import minimize, differential_evolution
-from formate_matrix_toMLData import *
-from data_generator import * 
+from .formate_matrix_toMLData import *
+from utils.data_generator import * 
 from skopt import gp_minimize
 from scipy.linalg import expm
 
