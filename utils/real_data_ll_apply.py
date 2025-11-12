@@ -144,9 +144,9 @@ if __name__ == "__main__":
     list_num_samples = [100,200,400,600,800,1000]
     for num_samples in list_num_samples:
         run_parallel_estimation(
-            csv_path="/Users/yamashitanatsuki/Documents/Python/CTMCxDeepSets/real_data/suidou.csv",
-            data_name="suidou",         # ← データ種別を指定
-            output_dir=f"dummy/suidow/samples_{num_samples}",
+            csv_path="/home/user/Documents/python/CTMCxDeepSets/real_data/shoban.csv",
+            data_name="shoban",         # ← データ種別を指定
+            output_dir=f"/media/user/TRANSCEND/datas/real_data/shoban/samples_{num_samples}",
             num_samples=num_samples,
             n_jobs=200,
             base_seed=123,
