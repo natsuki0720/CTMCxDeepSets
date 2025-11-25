@@ -276,14 +276,14 @@ class DeepSets_varSets_forDiagnel(nn.Module):
 
     # ---------------- NPE 用: log p(q_true | X) ----------------
     def log_prob(
-        self,
-        state: torch.Tensor,
-        delta_t: torch.Tensor,
-        lengths: torch.Tensor,
-        q_true: torch.Tensor,
+    self,
+    state: torch.Tensor,
+    delta_t: torch.Tensor,
+    lengths: torch.Tensor,
+    q_true: torch.Tensor,
     ) -> torch.Tensor:
         """
-        q_true: (B,3) 真の推移率パラメータ
+        q_true: (B,3) 真の推移率パラメータ (>0)
         戻り値: log p(q_true | X) (B,)
         """
         device = self.device
@@ -292,33 +292,34 @@ class DeepSets_varSets_forDiagnel(nn.Module):
         delta_t = delta_t.to(device)
         lengths = lengths.to(device)
 
-        # q > 0 前提なので log q を取る
         eps = 1e-12
+        # ここは「log q」＝変換先の変数
         log_q = torch.log(q_true.clamp_min(eps))  # (B,D)
 
         pi, mu, log_sigma = self.posterior_mixture(state, delta_t, lengths)
         K, D = self.mdn_components, self.output_dim
 
-        # log N(log_q | mu_k, sigma_k^2) を計算
-        #  log N(x | μ, σ^2) = -0.5 * [ (x-μ)^2/σ^2 + log(2πσ^2) ]
+        # ガウス logpdf (log q 空間で)
         log_q_expanded = log_q.unsqueeze(1)        # (B,1,D)
-        mu = mu                                     # (B,K,D)
-        log_sigma = log_sigma                       # (B,K,D)
-        sigma2 = torch.exp(2.0 * log_sigma)         # (B,K,D)
+        sigma2 = torch.exp(2.0 * log_sigma)        # (B,K,D)
 
-        # ガウス logpdf（各成分・各次元）
         log_norm_const = -0.5 * (torch.log(2 * torch.pi * sigma2))
         log_exp_term = -0.5 * ((log_q_expanded - mu) ** 2 / sigma2)
         log_pdf_per_dim = log_norm_const + log_exp_term  # (B,K,D)
 
-        # 各成分の logpdf（次元独立と仮定して和を取る）
+        # 各成分の logpdf（次元独立）
         log_pdf_comp = log_pdf_per_dim.sum(dim=-1)  # (B,K)
 
-        # mixture: log sum_k π_k * N_k
+        # mixture: log p_Y(log q | X)
         log_pi = torch.log(pi.clamp_min(eps))       # (B,K)
-        log_mixture = torch.logsumexp(log_pi + log_pdf_comp, dim=-1)  # (B,)
+        log_mixture_logq = torch.logsumexp(log_pi + log_pdf_comp, dim=-1)  # (B,)
 
-        return log_mixture  # (B,)
+        # 変数変換のヤコビアン：
+        # p_Q(q) = p_Y(log q) * ∏(1/q_d) → log p_Q(q) = log p_Y(log q) - ∑ log q_d
+        log_p_q = log_mixture_logq - log_q.sum(dim=-1)  # (B,)
+
+        return log_p_q
+
 
     # ---------------- 事後サンプル生成 ----------------
     @torch.no_grad()
