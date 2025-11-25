@@ -214,15 +214,22 @@ class DeepSets_varSets_forDiagnel(nn.Module):
         x = self.drop(F.gelu(self.ln1(self.fc1(x))))    # (B,L,H1)
         x = self.drop(F.gelu(self.ln2(self.fc2(x))))    # (B,L,H2)
 
-        # attention pooling
+        # ===== ここから pooling 部分を修正 =====
         arange_L = torch.arange(L, device=device).unsqueeze(0)  # (1,L)
         key_padding_mask = arange_L >= lengths.unsqueeze(1)     # (B,L) True=PAD
 
         attn_input = torch.tanh(self.att_fc(x))                 # (B,L,H2)
-        attn_score = self.att_score(attn_input).squeeze(-1)     # (B,L)
-        attn_score = attn_score.masked_fill(key_padding_mask, float("-inf"))
-        attn_weights = F.softmax(attn_score, dim=1)             # (B,L)
-        pooled = torch.sum(x * attn_weights.unsqueeze(-1), dim=1)  # (B,H2)
+        raw_score = self.att_score(attn_input).squeeze(-1)      # (B,L)
+
+        # PAD 部分はスコアを非常に小さくしてから softplus → ほぼ0にする
+        raw_score = raw_score.masked_fill(key_padding_mask, -1e9)
+
+        # 正規化しない正の重み（情報を「足す」方向）
+        attn_weight = F.softplus(raw_score)                     # (B,L)
+        attn_weight = attn_weight.masked_fill(key_padding_mask, 0.0)
+
+        # sum pooling（平均ではなく和）
+        pooled = torch.sum(x * attn_weight.unsqueeze(-1), dim=1)  # (B,H2)
 
         # context h
         h = self.drop(F.gelu(self.out_ln1(self.out_fc1(pooled)))) # (B,Hout1)
