@@ -6,7 +6,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 import argparse
 
-# from .likelihood import Likelihood_diagonal_exp
+from .likelihood import Likelihood_diagonal_exp
 from formate_matrix_toMLData import formate_dataMatrix, matrix_trimer
 
 from data_generator import (
@@ -44,13 +44,13 @@ def _seed_for_index(base_seed: int, idx: int) -> int:
     ss = np.random.SeedSequence([base_seed, idx])
     return int(ss.generate_state(1)[0])
 
-# def _insert_likelihood_results(M: np.ndarray,) -> np.ndarray:
-#     mt = matrix_trimer(M)
-#     data = mt.trim_data(start=3)
-#     ll = Likelihood_diagonal_exp(data, num_state=4)
-#     Q_ll = ll.optimize(np.array([-0.5,-1,-1.5]))
-#     new_M = np.insert(M,4,Q_ll,axis=0)
-#     return new_M
+def _insert_likelihood_results(M: np.ndarray,) -> np.ndarray:
+    mt = matrix_trimer(M)
+    data = mt.trim_data(start=3)
+    ll = Likelihood_diagonal_exp(data, num_state=4)
+    Q_ll = ll.optimize(np.array([-0.5,-1,-1.5]))
+    new_M = np.insert(M,4,Q_ll,axis=0)
+    return new_M
 
 
 def _one_dataset_job(idx: int, out_dir: str, states: int, lifespan: float,
