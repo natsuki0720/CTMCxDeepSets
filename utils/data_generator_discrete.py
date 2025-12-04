@@ -6,7 +6,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 import argparse
 
-from .likelihood import Likelihood_diagonal_exp
+from likelihood import Likelihood_diagonal_exp
 from formate_matrix_toMLData import formate_dataMatrix, matrix_trimer
 
 from data_generator import (
@@ -75,7 +75,7 @@ def _one_dataset_job(idx: int, out_dir: str, states: int, lifespan: float,
     # n_intervals をランダム化した DirichletDeltaT を利用
     del_t_gen = DirichletDeltaT(min_intervals=2, max_intervals=10, rng=rng)
     M = dg.generate_matrix(del_t_gen.sample)
-    # M = _insert_likelihood_results(M)
+    M = _insert_likelihood_results(M)
     # CSV出力
     dg.generate_dataFile(M, name, str(out))
     return str(out / name)
