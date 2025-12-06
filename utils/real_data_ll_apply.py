@@ -148,7 +148,7 @@ if __name__ == "__main__":
             data_name="shoban",         # ← データ種別を指定
             output_dir=f"/media/user/TRANSCEND/datas/real_data/shoban/samples_{num_samples}",
             num_samples=num_samples,
-            n_jobs=200,
+            n_jobs=1250,
             base_seed=123,
             max_workers=64,
         )
