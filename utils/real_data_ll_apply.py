@@ -141,14 +141,16 @@ def run_parallel_estimation(
 
 
 if __name__ == "__main__":
-    list_num_samples = [100,200,400,600,800,1000]
+    df = pd.read_csv("../real_data/suidou.csv")
+    l = len(df)
+    list_num_samples = [int(l * 0.25), int(l * 0.5), int(l*0.75)]
     for num_samples in list_num_samples:
         run_parallel_estimation(
             csv_path="/home/user/Documents/python/CTMCxDeepSets/real_data/shoban.csv",
             data_name="shoban",         # ← データ種別を指定
             output_dir=f"/media/user/TRANSCEND/datas/real_data/shoban/samples_{num_samples}",
             num_samples=num_samples,
-            n_jobs=1250,
+            n_jobs=1000,
             base_seed=123,
             max_workers=64,
         )
