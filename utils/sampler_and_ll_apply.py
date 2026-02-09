@@ -6,8 +6,8 @@ import argparse
 
 import numpy as np
 
-from .likelihood import Likelihood_diagonal_exp
-from .formate_matrix_toMLData import formate_dataMatrix, matrix_trimer
+from likelihood import Likelihood_diagonal_exp
+from formate_matrix_toMLData import formate_dataMatrix, matrix_trimer
 
 
 def _seed_for_index(base_seed: int, idx: int) -> int:

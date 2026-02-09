@@ -3,7 +3,8 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from .likelihood import Likelihood_diagonal_exp
+
+from likelihood import Likelihood_diagonal_exp
 
 def _load_and_preprocess_csv(csv_path: str, data_name:str,target_cols: list[str] = None) -> pd.DataFrame:
     """CSVを読み込み、カラム名を統一し、必要な列のみ抽出する."""
@@ -22,13 +23,13 @@ def _pre_process(df:pd.DataFrame,data_name:str) -> dict:
         
     if data_name == "Frank":
         def grading(x):
-            if x <= 30:
+            if x <= 3:
                 return 1
-            elif x <= 50:
+            elif x <= 5.5:
                 return 2
-            elif x <= 70:
+            elif x <= 8:
                 return 3
-            else: 4
+            else: return 4
         df["Post_IRI_Class"] = df['Post-State IRI'].apply(grading)
         df["Pre_IRI_Class"] = df['Pre-State IRI'].apply(grading)
         df["time"] = df['Inspection Time of PostState IRI']-df['Inspection Time of Prestate']
@@ -45,6 +46,20 @@ def _pre_process(df:pd.DataFrame,data_name:str) -> dict:
         df = df.rename(columns={0: "pre", 1: "post", 2: "time"})
         df = df[df["pre"] < 4]
         df = df[df["post"] < 5]
+        
+    if data_name == "data_DB2021":
+        def grading_DB2021(x):
+            if x >= 80:
+                return 1
+            elif x >=60:
+                return 2
+            elif x >= 40:
+                return 3
+            else: return 4
+        df["pre"] = df['BCI1'].apply(grading_DB2021)
+        df["post"] = df['BCI2'].apply(grading_DB2021)
+        df["time"] = df['点検年2']-df['点検年1']
+        df = df[df["pre"]<4]
     
     return df
         
@@ -62,7 +77,7 @@ def _sampling(df: pd.DataFrame,num:int) -> np.ndarray:
 def _execute_likelihood(sampled_arr: np.ndarray) -> np.ndarray:
    
     ll = Likelihood_diagonal_exp(sampled_arr, num_state=4)
-    Q_ll = ll.optimize(np.array([-0.5,-1,-1.5]))
+    Q_ll = ll.optimize(np.array([-1.0,-1.5,-2.0]))
     return Q_ll
 
 
@@ -141,14 +156,14 @@ def run_parallel_estimation(
 
 
 if __name__ == "__main__":
-    df = pd.read_csv("../real_data/suidou.csv")
+    df = pd.read_csv("real_data/Frank.csv")
     l = len(df)
     list_num_samples = [int(l * 0.25), int(l * 0.5), int(l*0.75)]
     for num_samples in list_num_samples:
         run_parallel_estimation(
-            csv_path="/home/user/Documents/python/CTMCxDeepSets/real_data/shoban.csv",
-            data_name="shoban",         # ← データ種別を指定
-            output_dir=f"/media/user/TRANSCEND/datas/real_data/shoban/samples_{num_samples}",
+            csv_path="/home/user/Documents/python/CTMCxDeepSets/real_data/Frank.csv",
+            data_name="Frank",         # ← データ種別を指定
+            output_dir=f"/mnt/ssd/datas/real_data/pavement/samples_{num_samples}",
             num_samples=num_samples,
             n_jobs=1000,
             base_seed=123,
