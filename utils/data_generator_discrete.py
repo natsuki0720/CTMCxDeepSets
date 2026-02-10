@@ -46,9 +46,11 @@ def _seed_for_index(base_seed: int, idx: int) -> int:
 
 def _insert_likelihood_results(M: np.ndarray,) -> np.ndarray:
     mt = matrix_trimer(M)
+    fmd = formate_dataMatrix()
     data = mt.trim_data(start=3)
     ll = Likelihood_diagonal_exp(data, num_state=4)
-    Q_ll = ll.optimize(np.array([-0.5,-1,-1.5]))
+    vec = fmd.GetOutputVector_byDiagonal(mt.trim_transitionRateMatrix())
+    Q_ll = ll.optimize(np.array(vec))
     new_M = np.insert(M,4,Q_ll,axis=0)
     return new_M
 
