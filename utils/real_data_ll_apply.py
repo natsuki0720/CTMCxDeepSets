@@ -4,7 +4,7 @@ import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
-from likelihood import Likelihood_diagonal_exp
+from .likelihood import Likelihood_diagonal_exp
 
 def _load_and_preprocess_csv(csv_path: str, data_name:str,target_cols: list[str] = None) -> pd.DataFrame:
     """CSVを読み込み、カラム名を統一し、必要な列のみ抽出する."""
@@ -20,6 +20,8 @@ def _pre_process(df:pd.DataFrame,data_name:str) -> dict:
         df = df.rename(columns={'建設時健全度（1と仮定）': "pre", '調査時健全度': "post", '経過年数': "time"})
     if data_name == "shoban":
         df = df.rename(columns={'Be(1-4)': "pre", 'Af(1-4)': "post", 'Ins': "time"})
+        df = df[df["pre"] < 4]
+        df = df[df["post"] < 5]
         
     if data_name == "Frank":
         def grading(x):
@@ -156,14 +158,14 @@ def run_parallel_estimation(
 
 
 if __name__ == "__main__":
-    df = pd.read_csv("real_data/Frank.csv")
+    df = pd.read_csv("real_data/shoban.csv")
     l = len(df)
     list_num_samples = [int(l * 0.25), int(l * 0.5), int(l*0.75)]
     for num_samples in list_num_samples:
         run_parallel_estimation(
-            csv_path="/home/user/Documents/python/CTMCxDeepSets/real_data/Frank.csv",
-            data_name="Frank",         # ← データ種別を指定
-            output_dir=f"/mnt/ssd/datas/real_data/pavement/samples_{num_samples}",
+            csv_path="/home/user/Documents/python/CTMCxDeepSets/real_data/shoban.csv",
+            data_name="shoban",         # ← データ種別を指定
+            output_dir=f"/mnt/ssd/datas/real_data/deck/samples_{num_samples}_2",
             num_samples=num_samples,
             n_jobs=1000,
             base_seed=123,
