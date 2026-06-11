@@ -31,6 +31,7 @@ class TrainLoopConfig:
     device: str = "cpu"
     early_stopping: EarlyStoppingConfig = EarlyStoppingConfig()
     log_every: int = 1  # print train/val loss every N epochs (0 disables)
+    grad_clip: float = 0.0  # max grad norm (0 disables); 1-5 recommended for structural heads
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,7 @@ def _run_epoch(
     loss_fn: nn.Module,
     device: torch.device,
     optimizer: Optimizer | None,
+    grad_clip: float = 0.0,
 ) -> float:
     is_train = optimizer is not None
     model.train(mode=is_train)
@@ -136,6 +138,10 @@ def _run_epoch(
 
         if optimizer is not None:
             loss.backward()
+            # Clip before stepping: a weakly-identified / large-residual batch can
+            # spike the structural-head NLL; clipping bounds the step (cheap insurance).
+            if grad_clip > 0.0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
             optimizer.step()
 
         batch_size = int(state.shape[0])
@@ -176,7 +182,7 @@ def fit(
     val_loss_history: list[float] = []
 
     for epoch in range(int(config.epochs)):
-        train_loss = _run_epoch(model, train_loader, criterion, device, optimizer)
+        train_loss = _run_epoch(model, train_loader, criterion, device, optimizer, grad_clip=float(config.grad_clip))
         with torch.no_grad():
             val_loss = _run_epoch(model, valid_loader, criterion, device, optimizer=None)
 

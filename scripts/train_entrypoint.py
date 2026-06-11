@@ -125,6 +125,22 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--k-ref",
+        type=float,
+        default=1000.0,
+        help=(
+            "Reference K for structural scaling: the head models the residual "
+            "standardized to K=k_ref, keeping it O(1) and representable even for "
+            "weakly-identified datasets (design note section 10.6)."
+        ),
+    )
+    parser.add_argument(
+        "--grad-clip",
+        type=float,
+        default=5.0,
+        help="Max gradient norm (0 disables). Bounds NLL spikes from large-residual batches.",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default=("cuda" if torch.cuda.is_available() else "cpu"),
@@ -384,6 +400,8 @@ def main() -> None:
         # architecture (mu_head presence depends on sqrt_k_scaling).
         model_config["logk_scale"] = float(args.logk_scale)
         model_config["sqrt_k_scaling"] = bool(args.sqrt_k_scaling)
+        if bool(args.sqrt_k_scaling):
+            model_config["k_ref"] = float(args.k_ref)
     if head == "flow":
         model_config["flow_transforms"] = int(args.flow_transforms)
         model_config["flow_hidden"] = int(args.flow_hidden)
@@ -394,6 +412,7 @@ def main() -> None:
         learning_rate=float(args.lr),
         device=str(args.device),
         early_stopping=EarlyStoppingConfig(patience=int(args.patience)),
+        grad_clip=float(args.grad_clip),
     )
 
     train_result = fit(

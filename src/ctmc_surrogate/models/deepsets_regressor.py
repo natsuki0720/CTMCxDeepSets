@@ -19,6 +19,8 @@ point head leaves the encoder untouched to preserve checkpoint compatibility.
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -77,6 +79,7 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
         flow_transforms: int = 3,
         flow_hidden: int = 64,
         sqrt_k_scaling: bool = False,
+        k_ref: float = 1000.0,
     ) -> None:
         super().__init__()
         head = str(head)
@@ -87,6 +90,14 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
         self.output_dim = int(output_dim)
         self.input_is_one_based = bool(input_is_one_based)
         self.logk_scale = float(logk_scale)
+        # Reference K for the structural scaling: the flow/Gaussian models the
+        # residual standardized to K = k_ref, not K = 1. Without it, a weakly
+        # identified dataset (posterior ~ prior, SD(z-mu) ~ 1.3) gives a residual
+        # u = sqrt(K)*(z-mu) ~ 94 at K=5000, far past the Gaussian log_diag clamp
+        # (e^3=20) and the NSF spline bound (~5) -> unrepresentable, exactly in the
+        # wide-posterior region we most want to show. k_ref keeps u ~ O(1) across
+        # the training K band for both well- and weakly-identified datasets.
+        self.k_ref = float(k_ref)
         self.log_diag_min = float(log_diag_min)
         self.log_diag_max = float(log_diag_max)
         # log K is injected only for posterior heads, keeping the point-head
@@ -248,14 +259,18 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
     # Heads
     # ------------------------------------------------------------------
     def _inv_sqrt_k(self, lengths: Tensor, ref: Tensor) -> Tensor:
-        """Return ``K^{-1/2}`` as a ``(B, 1)`` tensor on ``ref``'s device/dtype.
+        """Return ``(K / k_ref)^{-1/2} = sqrt(k_ref / K)`` as a ``(B, 1)`` tensor.
 
-        Uses the *true* sample count K (not ``logk_scale``-normalized): the
-        1/sqrt(K) contraction is the structural identity, while ``logk_scale``
-        only normalizes the log K *input* fed to the encoder.
+        The structural contraction is ``SD(z) proportional to 1/sqrt(K)`` (the
+        identity Hessian = K * empirical-curvature); ``k_ref`` only re-bases the
+        residual the head models to K = k_ref instead of K = 1, keeping it O(1)
+        and representable (see ``k_ref`` in ``__init__``). It is a constant factor
+        and does not change the K-dependence, so the replication ratio stays 1/sqrt(2)
+        and the shrinkage slope stays -1/2. ``logk_scale`` is unrelated: it only
+        normalizes the log K *input* fed to the encoder context.
         """
         logk = torch.log(lengths.to(device=ref.device, dtype=ref.dtype).clamp(min=1.0))
-        return torch.exp(-0.5 * logk).unsqueeze(-1)
+        return torch.exp(-0.5 * (logk - math.log(self.k_ref))).unsqueeze(-1)
 
     def _gaussian_posterior(
         self, h: Tensor, pooled: Tensor, lengths: Tensor
@@ -374,4 +389,5 @@ def build_model(model_config: dict) -> DeepSetsVarSetsAttnRegressor:
         flow_transforms=int(model_config.get("flow_transforms", 3)),
         flow_hidden=int(model_config.get("flow_hidden", 64)),
         sqrt_k_scaling=bool(model_config.get("sqrt_k_scaling", False)),
+        k_ref=float(model_config.get("k_ref", 1000.0)),
     )
