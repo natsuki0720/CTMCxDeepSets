@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import os
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -170,8 +172,16 @@ def parse_ctmc_csv_header(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     return q, q_mle
 
 
-def load_dir(dir_path: str | Path, recursive: bool = False) -> list[ParsedCTMCDataset]:
-    """Search for CSVs under a directory and parse all files."""
+def load_dir(
+    dir_path: str | Path, recursive: bool = False, workers: int | None = None
+) -> list[ParsedCTMCDataset]:
+    """Search for CSVs under a directory and parse all files.
+
+    ``workers`` parses the files in parallel across that many processes (order
+    preserved, so seeded sampling downstream stays reproducible). Serial parsing
+    of ~200k CSVs takes order an hour; with ``workers`` it scales near-linearly.
+    ``None`` or ``<= 1`` keeps the original serial behavior.
+    """
 
     base = Path(dir_path)
     if not base.exists():
@@ -185,6 +195,14 @@ def load_dir(dir_path: str | Path, recursive: bool = False) -> list[ParsedCTMCDa
         for p in iterator
         if p.is_file() and not p.name.startswith(".") and p.stat().st_size > 0
     )
+
+    n_workers = int(workers) if workers is not None else 1
+    if n_workers > 1 and len(csv_paths) > 1:
+        n_workers = min(n_workers, len(csv_paths), os.cpu_count() or n_workers)
+        chunksize = max(1, len(csv_paths) // (n_workers * 8))
+        path_strs = [str(p) for p in csv_paths]
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            return list(executor.map(parse_ctmc_csv, path_strs, chunksize=chunksize))
 
     return [parse_ctmc_csv(p) for p in csv_paths]
 

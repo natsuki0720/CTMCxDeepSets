@@ -90,6 +90,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=10, help="Early stopping patience")
     parser.add_argument("--num-workers", type=int, default=32, help="Number of DataLoader workers")
     parser.add_argument(
+        "--load-workers",
+        type=int,
+        default=1,
+        help="Processes for parsing CSVs in load_dir (1=serial). Use e.g. 16-32 for the full ~200k set.",
+    )
+    parser.add_argument(
         "--state-index-base",
         type=str,
         choices=["auto", "zero", "one"],
@@ -313,7 +319,7 @@ def main() -> None:
 
     run_dir = _resolve_run_dir(args.out_dir, no_auto_run_dir=bool(args.no_auto_run_dir), run_name=args.run_name)
 
-    datasets = load_dir(args.data_dir, recursive=bool(args.recursive))
+    datasets = load_dir(args.data_dir, recursive=bool(args.recursive), workers=int(args.load_workers))
 
     head = str(args.head)
     is_npe = head != "point"
