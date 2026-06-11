@@ -69,8 +69,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--num-exact", type=int, default=15, help="Datasets for NPE-vs-exact comparison")
     parser.add_argument("--num-states", type=int, default=4)
     parser.add_argument("--lifetime-upper", type=float, default=100.0)
-    parser.add_argument("--k-min", type=int, default=200)
+    parser.add_argument("--k-min", type=int, default=200, help="Lower K of the *calibration* draws (may dip below the training band to expose OOD)")
     parser.add_argument("--k-max", type=int, default=5000)
+    parser.add_argument("--train-k-min", type=int, default=500, help="Lower K of the training band; shrinkage slope and the in-band SBC use [train_k_min, train_k_max]")
+    parser.add_argument("--train-k-max", type=int, default=5000, help="Upper K of the training band")
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args()
@@ -106,13 +108,20 @@ def main() -> None:
         "mean_ratio_overall": float(rep_ratios.mean()),
     }
 
-    # 2) SBC (overall + stratified by K).
+    # 2) SBC (overall + in-band + stratified by K).
+    # Calibration datasets may dip below the training band (k_min < train_k_min) to
+    # expose out-of-distribution breakage; the *headline* calibration number is the
+    # in-band subset, so "didn't learn contraction" is never conflated with "OOD".
+    tk_min, tk_max = int(args.train_k_min), int(args.train_k_max)
     sbc = run_sbc(model, datasets, num_draws=int(args.num_draws), seed=int(args.seed))
     ks = sbc_ks_test(sbc)
-    k_edges = [args.k_min, 500, 1000, 2000, args.k_max + 1]
+    in_band = sbc_stratified(sbc, [tk_min, tk_max + 1])
+    k_edges = [args.k_min, tk_min, 1000, 2000, args.k_max + 1]
     report["sbc"] = {
-        "ks_statistic": ks["ks_statistic"],
+        "train_band": [tk_min, tk_max],
+        "ks_statistic": ks["ks_statistic"],  # all datasets, including any OOD
         "p_value": ks["p_value"],
+        "in_band": in_band[0] if in_band else None,  # headline calibration (train band only)
         "stratified": sbc_stratified(sbc, k_edges),
     }
 
@@ -129,12 +138,16 @@ def main() -> None:
         TransitionRateConfig(num_states=int(args.num_states), lifetime_upper=upper)
     ).generate(np.random.default_rng(int(args.seed) + 99))
     sampler = make_fixed_truth_sampler(q_fixed, seed=int(args.seed) + 7)
-    k_values = [200, 400, 800, 1600, 3200, min(5000, int(args.k_max))]
+    # Fit the shrinkage slope on in-band K only: a K=200 point outside the training
+    # band (500-5000) would mix "didn't learn contraction" with "OOD extrapolation".
+    k_values = [int(round(x)) for x in np.geomspace(tk_min, tk_max, 6)]
     shrink = shrinkage_curve(model, sampler, k_values)
     report["shrinkage"] = {
         "expected_slope": -0.5,
+        "train_band": [tk_min, tk_max],
         "k_values": shrink.k_values,
         "slopes_per_dim": shrink.slopes,
+        "note": "slope fit on in-band K only (no OOD extrapolation)",
     }
 
     # 5) NPE vs exact posterior on a few fresh datasets.
@@ -168,10 +181,14 @@ def main() -> None:
     Path(out_path).write_text(json.dumps(_to_jsonable(report), ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"NPE evaluation report written to: {out_path}")
+    print(f"  head / sqrt_k_scaling: {report['head']} / {predictor.model.sqrt_k_scaling}")
     print(f"  replication mean ratio (target {1/np.sqrt(2):.3f}): {report['replication']['mean_ratio_overall']:.3f}")
-    print(f"  SBC KS per dim: {np.round(report['sbc']['ks_statistic'], 3)}")
+    print(f"  SBC KS per dim (all K): {np.round(report['sbc']['ks_statistic'], 3)}")
+    in_band = report["sbc"].get("in_band")
+    if in_band and "ks_statistic" in in_band:
+        print(f"  SBC KS per dim (in-band {report['sbc']['train_band']}, n={in_band['n_datasets']}): {np.round(in_band['ks_statistic'], 3)}")
     print(f"  coverage 50/90: {report['coverage']['overall']}")
-    print(f"  shrinkage slopes (target -0.5): {np.round(report['shrinkage']['slopes_per_dim'], 3)}")
+    print(f"  shrinkage slopes in-band (target -0.5): {np.round(report['shrinkage']['slopes_per_dim'], 3)}")
     if exact_rows:
         print(f"  NPE-vs-exact |Δmean z|: {report['exact_comparison']['mean_abs_error_mean_z']:.4f}")
 

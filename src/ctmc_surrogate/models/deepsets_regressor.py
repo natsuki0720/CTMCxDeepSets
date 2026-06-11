@@ -76,6 +76,7 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
         log_diag_max: float = 3.0,
         flow_transforms: int = 3,
         flow_hidden: int = 64,
+        sqrt_k_scaling: bool = False,
     ) -> None:
         super().__init__()
         head = str(head)
@@ -91,6 +92,11 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
         # log K is injected only for posterior heads, keeping the point-head
         # weight layout identical to the v2 model.
         self._inject_logk = head != "point"
+        # Structural 1/sqrt(K) scaling (design note section 10): the posterior is
+        # z = mu(pooled) + u / sqrt(K) with u ~ flow/Gaussian. The 1/sqrt(K) law is
+        # an identity (Hessian = K * empirical-curvature), so we bake it in instead
+        # of asking the network to learn it from the weak log K signal.
+        self.sqrt_k_scaling = bool(sqrt_k_scaling) and (head != "point")
 
         self.embedding = nn.Embedding(
             num_embeddings=int(num_categories) + 1,
@@ -131,6 +137,22 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
                 hidden=int(flow_hidden),
             )
 
+        # Mean head for the structural form, fed by the K-invariant pooled vector
+        # (no log K) so that the posterior mean is exactly replication-invariant.
+        # An MLP (not a single Linear): a linear read-out of `pooled` plateaus at
+        # RMSE ~0.34 on z, but mu must reach ~0.1 or the residual u = sqrt(K)(z-mu)
+        # stays O(sqrt(K)) and breaks the flow / inflates the Gaussian covariance.
+        # An MLP of the same depth as the head reaches ~0.14 and keeps improving.
+        # Created only when active, keeping legacy (non-structural) checkpoints loadable.
+        if self.sqrt_k_scaling:
+            self.mu_head = nn.Sequential(
+                nn.Linear(int(token_hidden2), int(output_hidden1)),
+                nn.GELU(),
+                nn.Linear(int(output_hidden1), int(output_hidden2)),
+                nn.GELU(),
+                nn.Linear(int(output_hidden2), int(output_dim)),
+            )
+
     # ------------------------------------------------------------------
     # Encoder
     # ------------------------------------------------------------------
@@ -139,8 +161,15 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
             return torch.where(state > 0, state, torch.zeros_like(state))
         return torch.where(state >= 0, state + 1, torch.zeros_like(state))
 
-    def _encode(self, state: Tensor, delta_t: Tensor, lengths: Tensor) -> Tensor:
-        """Run the DeepSets encoder and return the head context ``h`` (B, output_hidden2)."""
+    def _encode(self, state: Tensor, delta_t: Tensor, lengths: Tensor) -> tuple[Tensor, Tensor]:
+        """Run the DeepSets encoder.
+
+        Returns ``(h, pooled)`` where ``h`` is the head context ``(B, output_hidden2)``
+        (with log K mixed in for posterior heads) and ``pooled`` is the raw
+        attention-pooled vector ``(B, token_hidden2)`` *before* log K injection.
+        ``pooled`` is exactly invariant to dataset replication (softmax-weighted
+        average), so the structural mean head ``mu(pooled)`` is replication-invariant.
+        """
         if state.ndim != 3 or state.shape[1] != 2:
             raise ValueError("state must have shape (B, 2, L).")
         if delta_t.ndim != 2:
@@ -190,12 +219,21 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
 
         pooled = torch.sum(x * weight.unsqueeze(-1), dim=1)
 
+        # Structural heads: feed the *detached* pooled into the head MLP so the
+        # ill-conditioned scale/shape NLL (residual u = sqrt(K)(z - mu) blows up
+        # until mu tracks z) cannot corrupt the shared encoder. The encoder is then
+        # driven solely by the well-conditioned mu-regression MSE via mu_head(pooled),
+        # learning the sufficient statistic; the flow models the residual shape on
+        # top of those (frozen-gradient) features. Non-structural path is unchanged.
+        head_pooled = pooled.detach() if self.sqrt_k_scaling else pooled
+
+        head_in = head_pooled
         if self._inject_logk:
             logk = torch.log(lengths.to(dtype=pooled.dtype).clamp(min=1.0)).unsqueeze(-1)
             logk = logk / self.logk_scale
-            pooled = torch.cat([pooled, logk], dim=-1)
+            head_in = torch.cat([head_pooled, logk], dim=-1)
 
-        h = self.out_fc1(pooled)
+        h = self.out_fc1(head_in)
         h = self.out_ln1(h)
         h = F.gelu(h)
         h = self.out_drop1(h)
@@ -204,30 +242,72 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
         h = self.out_ln2(h)
         h = F.gelu(h)
         h = self.out_drop2(h)
-        return h
+        return h, pooled
 
     # ------------------------------------------------------------------
     # Heads
     # ------------------------------------------------------------------
-    def _gaussian_posterior(self, h: Tensor) -> torch.distributions.MultivariateNormal:
+    def _inv_sqrt_k(self, lengths: Tensor, ref: Tensor) -> Tensor:
+        """Return ``K^{-1/2}`` as a ``(B, 1)`` tensor on ``ref``'s device/dtype.
+
+        Uses the *true* sample count K (not ``logk_scale``-normalized): the
+        1/sqrt(K) contraction is the structural identity, while ``logk_scale``
+        only normalizes the log K *input* fed to the encoder.
+        """
+        logk = torch.log(lengths.to(device=ref.device, dtype=ref.dtype).clamp(min=1.0))
+        return torch.exp(-0.5 * logk).unsqueeze(-1)
+
+    def _gaussian_posterior(
+        self, h: Tensor, pooled: Tensor, lengths: Tensor
+    ) -> torch.distributions.MultivariateNormal:
         out = self.out_fc3(h)
         d = self.output_dim
-        mu = out[:, :d]
         log_diag = out[:, d : 2 * d].clamp(self.log_diag_min, self.log_diag_max)
         off_diag = out[:, 2 * d :]
         scale_tril = build_scale_tril(log_diag, off_diag)
+        if self.sqrt_k_scaling:
+            # z = mu(pooled) + L u / sqrt(K):  mean K-invariant, SD ~ K^{-1/2}.
+            # mu is detached in the location and trained by the auxiliary MSE in
+            # NPELoss (see design note section 10): the NLL gradient on mu is
+            # ill-conditioned (residual scales with sqrt(K)), so mu learns the
+            # conditional mean directly while the scale/shape learns via NLL.
+            mu = self.mu_head(pooled)
+            scale_tril = scale_tril * self._inv_sqrt_k(lengths, scale_tril).unsqueeze(-1)
+            dist = torch.distributions.MultivariateNormal(
+                loc=mu.detach(), scale_tril=scale_tril, validate_args=False
+            )
+            dist.mu_structural = mu
+            return dist
         return torch.distributions.MultivariateNormal(
-            loc=mu, scale_tril=scale_tril, validate_args=False
+            loc=out[:, :d], scale_tril=scale_tril, validate_args=False
         )
 
     def posterior(self, state: Tensor, delta_t: Tensor, lengths: Tensor):
         """Return the conditional posterior ``q_phi(z | X)`` (Gaussian or flow heads)."""
         if self.head == "point":
             raise RuntimeError("posterior() is only available for the gaussian/flow heads.")
-        h = self._encode(state, delta_t, lengths)
+        h, pooled = self._encode(state, delta_t, lengths)
         if self.head == "gaussian":
-            return self._gaussian_posterior(h)
-        return self.flow(h)
+            return self._gaussian_posterior(h, pooled, lengths)
+
+        flow_dist = self.flow(h)
+        if not self.sqrt_k_scaling:
+            return flow_dist  # flow models z directly (learned K-dependence)
+        # Structural form: flow models the K=1 standardized residual u, then
+        # z = mu(pooled) + u / sqrt(K). The affine's Jacobian (+D/2 logK) is
+        # accounted for automatically by TransformedDistribution.log_prob.
+        mu = self.mu_head(pooled)
+        # scale must be (B, D), not (B, 1): AffineTransform.log_abs_det_jacobian sums
+        # one factor per event dimension, so a (B, 1) scale would undercount the
+        # Jacobian by (D-1)*log(sqrt(K)) and corrupt the flow NLL.
+        scale = self._inv_sqrt_k(lengths, mu).expand_as(mu)
+        # mu detached in the transform: it is trained by the auxiliary MSE in
+        # NPELoss (residual u = sqrt(K)(z - mu) is O(sqrt(K)) until mu tracks z,
+        # so the flow NLL cannot condition mu). The flow learns the residual shape.
+        affine = torch.distributions.AffineTransform(loc=mu.detach(), scale=scale, event_dim=1)
+        dist = torch.distributions.TransformedDistribution(flow_dist, affine)
+        dist.mu_structural = mu
+        return dist
 
     def forward(self, state: Tensor, delta_t: Tensor, lengths: Tensor):
         """Forward pass.
@@ -236,7 +316,7 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
         * gaussian / flow head -> conditional posterior distribution over ``z``.
         """
         if self.head == "point":
-            h = self._encode(state, delta_t, lengths)
+            h, _ = self._encode(state, delta_t, lengths)
             output = F.softplus(self.out_fc3(h))
             if __debug__:
                 assert torch.all(output >= 0), "softplus output is negative."
@@ -293,4 +373,5 @@ def build_model(model_config: dict) -> DeepSetsVarSetsAttnRegressor:
         log_diag_max=float(model_config.get("log_diag_max", 3.0)),
         flow_transforms=int(model_config.get("flow_transforms", 3)),
         flow_hidden=int(model_config.get("flow_hidden", 64)),
+        sqrt_k_scaling=bool(model_config.get("sqrt_k_scaling", False)),
     )

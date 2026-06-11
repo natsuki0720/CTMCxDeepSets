@@ -109,6 +109,22 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--flow-transforms", type=int, default=3, help="Number of flow transforms (head=flow)")
     parser.add_argument("--flow-hidden", type=int, default=64, help="Hidden width of flow transforms (head=flow)")
     parser.add_argument(
+        "--logk-scale",
+        type=float,
+        default=5.0,
+        help="Divisor normalizing the log K *input* to the encoder (gaussian/flow heads).",
+    )
+    parser.add_argument(
+        "--sqrt-k-scaling",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Bake the 1/sqrt(K) posterior contraction into the architecture "
+            "(z = mu(pooled) + u/sqrt(K)); design note section 10. On by default for "
+            "gaussian/flow heads. Use --no-sqrt-k-scaling for the legacy learned-K baseline."
+        ),
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default=("cuda" if torch.cuda.is_available() else "cpu"),
@@ -363,6 +379,11 @@ def main() -> None:
         "input_is_one_based": (resolved_state_index_base == "one"),
         "head": head,
     }
+    if is_npe:
+        # Persist the K-handling knobs so the evaluator rebuilds the same
+        # architecture (mu_head presence depends on sqrt_k_scaling).
+        model_config["logk_scale"] = float(args.logk_scale)
+        model_config["sqrt_k_scaling"] = bool(args.sqrt_k_scaling)
     if head == "flow":
         model_config["flow_transforms"] = int(args.flow_transforms)
         model_config["flow_hidden"] = int(args.flow_hidden)

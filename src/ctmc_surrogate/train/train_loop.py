@@ -30,6 +30,7 @@ class TrainLoopConfig:
     weight_decay: float = 0.0
     device: str = "cpu"
     early_stopping: EarlyStoppingConfig = EarlyStoppingConfig()
+    log_every: int = 1  # print train/val loss every N epochs (0 disables)
 
 
 @dataclass(frozen=True)
@@ -65,11 +66,29 @@ class NPELoss(nn.Module):
     objective is the mean NLL ``-log q_phi(z_true | X)``, a strictly proper
     scoring rule whose minimizer is the true posterior. ``target`` is the
     generating log-lifetime ``z = log nu`` produced by the dataset.
+
+    Structural sqrt(K) heads (design note section 10) expose the mean estimate
+    ``mu(pooled)`` as ``posterior.mu_structural``. There the residual fed to the
+    flow is ``u = sqrt(K) * (z - mu)``; until ``mu`` tracks ``z`` it is O(sqrt(K))
+    and the flow cannot fit it, so the NLL alone trains ``mu`` only through a
+    pathological gradient. We add an auxiliary MSE ``||mu - z||^2`` (mu is
+    detached inside the affine, so this is mu's *only* gradient): mu learns the
+    conditional mean like a well-conditioned point estimate, the flow learns the
+    now-O(1) standardized residual shape, and the structural 1/sqrt(K) guarantee
+    is untouched. The MSE vanishes (~sigma_z^2) at the optimum, so it does not
+    bias the proper-scoring NLL.
     """
 
+    def __init__(self, mu_weight: float = 1.0) -> None:
+        super().__init__()
+        self.mu_weight = float(mu_weight)
+
     def forward(self, posterior: Any, target: Tensor) -> Tensor:
-        log_prob = posterior.log_prob(target)
-        return -log_prob.mean()
+        loss = -posterior.log_prob(target).mean()
+        mu = getattr(posterior, "mu_structural", None)
+        if mu is not None and self.mu_weight > 0.0:
+            loss = loss + self.mu_weight * ((mu - target) ** 2).mean()
+        return loss
 
 
 def _move_batch_to_device(
@@ -173,7 +192,15 @@ def fit(
         else:
             no_improve_epochs += 1
 
+        if int(config.log_every) > 0 and (epoch % int(config.log_every) == 0 or improved):
+            mark = " *best" if improved else f"  (no-improve {no_improve_epochs}/{config.early_stopping.patience})"
+            print(
+                f"epoch {epoch + 1:4d}/{int(config.epochs)}  train {train_loss:10.4f}  val {val_loss:10.4f}{mark}",
+                flush=True,
+            )
+
         if no_improve_epochs >= int(config.early_stopping.patience):
+            print(f"early stop at epoch {epoch + 1} (best epoch {best_epoch + 1}, val {best_val_loss:.4f})", flush=True)
             break
 
     if best_state_dict is None:
