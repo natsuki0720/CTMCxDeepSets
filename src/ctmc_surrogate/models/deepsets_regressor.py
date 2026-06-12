@@ -80,6 +80,7 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
         flow_hidden: int = 64,
         sqrt_k_scaling: bool = False,
         k_ref: float = 1000.0,
+        logk_context: bool = True,
     ) -> None:
         super().__init__()
         head = str(head)
@@ -101,8 +102,13 @@ class DeepSetsVarSetsAttnRegressor(nn.Module):
         self.log_diag_min = float(log_diag_min)
         self.log_diag_max = float(log_diag_max)
         # log K is injected only for posterior heads, keeping the point-head
-        # weight layout identical to the v2 model.
-        self._inject_logk = head != "point"
+        # weight layout identical to the v2 model. With structural scaling, log K
+        # in the head context lets the net learn a per-K width adjustment that
+        # erodes the 1/sqrt(K) guarantee at scale (replication drifts 0.71->0.79,
+        # slope -0.5->-0.35, posteriors ~1.7x too wide vs exact at high K).
+        # logk_context=False drops it so K enters ONLY through the structural
+        # sqrt(k_ref/K) factor (replication/slope then exact by construction).
+        self._inject_logk = (head != "point") and bool(logk_context)
         # Structural 1/sqrt(K) scaling (design note section 10): the posterior is
         # z = mu(pooled) + u / sqrt(K) with u ~ flow/Gaussian. The 1/sqrt(K) law is
         # an identity (Hessian = K * empirical-curvature), so we bake it in instead
@@ -390,4 +396,5 @@ def build_model(model_config: dict) -> DeepSetsVarSetsAttnRegressor:
         flow_hidden=int(model_config.get("flow_hidden", 64)),
         sqrt_k_scaling=bool(model_config.get("sqrt_k_scaling", False)),
         k_ref=float(model_config.get("k_ref", 1000.0)),
+        logk_context=bool(model_config.get("logk_context", True)),
     )

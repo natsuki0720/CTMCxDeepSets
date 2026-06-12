@@ -147,6 +147,16 @@ def _parse_args() -> argparse.Namespace:
         help="Max gradient norm (0 disables). Bounds NLL spikes from large-residual batches.",
     )
     parser.add_argument(
+        "--logk-context",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Inject log K into the head context (default). --no-logk-context drops it so "
+            "K enters only via the structural sqrt(k_ref/K), making replication/slope exact "
+            "(use to fix the large-data drift / high-K over-dispersion; design note section 10.8)."
+        ),
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default=("cuda" if torch.cuda.is_available() else "cpu"),
@@ -406,6 +416,7 @@ def main() -> None:
         # architecture (mu_head presence depends on sqrt_k_scaling).
         model_config["logk_scale"] = float(args.logk_scale)
         model_config["sqrt_k_scaling"] = bool(args.sqrt_k_scaling)
+        model_config["logk_context"] = bool(args.logk_context)
         if bool(args.sqrt_k_scaling):
             model_config["k_ref"] = float(args.k_ref)
     if head == "flow":
